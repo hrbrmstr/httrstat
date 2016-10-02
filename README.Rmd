@@ -12,6 +12,7 @@ knitr::opts_chunk$set(echo=TRUE, message=FALSE, warning=FALSE, fig.width=7, fig.
 
 ```{r}
 library(httr)
+library(curl)
 library(purrr)
 library(dplyr)
 library(tidyr)
@@ -20,49 +21,70 @@ library(ggplot2)
 library(hrbrmisc) # devtools::install_github("hrbrmstr/hrbrmisc")
 
 httr_stat <- function(res) {
-
+  
+  if ("redirect" %notin% names(res$times)) {
+    res$times <- c(redirect=0.00, res$times)
+  }
+  
   full_times <- c(res$times[1:5], contenttransfer=unname(res$times[6]-res$times[5]), res$times[6])
   start_pos <- c(0, unname(cumsum(c(0, full_times[2:6]))))
   end_pos <- start_pos + full_times
   stat <- c("Redirect", "Name Lookup", "Connect", "Pre-Transfer", "Start Transfer",
             "Content Transfer", "Total")
-
+  
   df <- data_frame(stat, start_pos, end_pos, duration=full_times)
+  
   df$start_pos[1] <- -df$end_pos[1]
   df$end_pos[1] <- 0
   df <- head(df, -1)
-
+  
   df$stat <- factor(df$stat, levels=rev(df$stat))
   df$start_pos <- 100 * df$start_pos
   df$end_pos <- 100 * df$end_pos
   df$duration <- 100 * df$duration
-
+  
   rng <- if (df$start_pos[1]<0) 1:6 else 2:6
-
+  
+  lims <- c(df$start_pos[1]*1.1, df$end_pos[6]*1.33)
+  if (df$start_pos>0) lims[1] <- -0.5
+  
   ggplot(head(df[rng,])) +
     geom_vline(data=df[2:6, ], aes(xintercept=end_pos), linetype="dotted", size=0.25, alpha=0.5) +
     geom_segment(aes(x=start_pos, xend=end_pos, y=stat, yend=stat),
                  arrow=arrow(ends="last", type="closed", length=unit(3, "points"))) +
     geom_label(aes(x=end_pos, y=stat, label=sprintf("(%4.3f ms)", duration)),
                hjust=0, family="Hind-Light", size=3, nudge_x=1, label.size=0) +
-    geom_label(data=df[6,], aes(x=end_pos, y="Connect", label=sprintf("Total: %4.3f ms", end_pos)),
+    geom_label(data=df[6,], aes(x=end_pos, y="Connect", 
+                                label=sprintf("Total: %4.3f ms", end_pos)),
                hjust=0, family="Hind-SemiBold", size=3, nudge_x=0.5, label.size=0) +
-    scale_x_continuous(expand=c(0,0.5), limits=c(df$start_pos[1]*1.1, df$end_pos[6]*1.33),
-                       breaks=0, labels="0") +
+    scale_x_continuous(expand=c(0,0.5), limits=lims, breaks=0, labels="0") +
     labs(x=NULL, y=NULL, title=NULL, subtitle=sprintf("Timings for %s", res$url)) +
     theme_hrbrmstr(grid="X", subtitle_family = "Hind") +
     theme(plot.subtitle=element_text(margin=margin(b=6))) -> gg
-
+  
   print(gg)
-
-  ah <- res$all_headers[[1]][[3]]
-  hnam <- stri_trans_totitle(names(ah))
-  hval <- flatten_chr(ah)
-  ahl <- max(map_int(hnam, nchar))
-
-  cat(sprintf("%s: %s %s\n", stri_pad_left("STATUS", ahl), res$all_headers[[1]][[2]], res$all_headers[[1]][[1]]))
-  cat(sprintf("%s: %s\n", stri_pad_left(hnam, ahl), hval), sep="")
-
+  
+  if (inherits(res, "response")) {
+    
+    walk(res$all_headers, function(x) {
+      
+      ah <- x[[3]]
+      hnam <- stri_trans_totitle(names(ah))
+      hval <- flatten_chr(ah)
+      ahl <- max(map_int(hnam, nchar))
+      
+      cat(sprintf("%s: %s %s\n", stri_pad_left("STATUS", ahl), x[[2]], x[[1]]))
+      cat(sprintf("%s: %s\n", stri_pad_left(hnam, ahl), hval), sep="")
+      cat("\n", sep="")
+      
+    })
+    
+  } else {
+    
+    cat(rawToChar(res$headers), sep="")
+    
+  }
+  
 }
 ```
 
@@ -76,6 +98,16 @@ Of course, it works fine when there aren't redirects:
 
 ```{r}
 httr_stat(GET("http://rud.is/b/"))
+```
+
+And, it also works on raw `curl` requests:
+
+```{r}
+httr_stat(curl_fetch_memory("http://rud.is/b"))
+```
+
+```{r}
+httr_stat(curl_fetch_memory("http://rud.is/b/"))
 ```
 
 It's interesting to see how some sites are configured (and how well they perform):
